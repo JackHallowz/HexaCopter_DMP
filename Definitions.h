@@ -1,11 +1,14 @@
 double Timer; //1000 is enough
-int TOP_SPEED = 1440;
+int TOP_SPEED = 1500;
 int IDLE_SPEED = 950;
+//Battery declare
 const int adc1 = 36;
 const int adc2 = 39;
 const int adc3 = 34;
 double A3Raw,A2Raw,A1Raw;
+double A3ADC, A2ADC, A1ADC;
 float cell_1, cell_2, cell_3;
+char loader[70];
 /* IMU Data */
 double accX, accY, accZ;
 double gyroX, gyroY, gyroZ;
@@ -21,7 +24,7 @@ double kalAngleX, kalAngleY; // Calculated angle using a Kalman filter
 TaskHandle_t Task1, Task2, Task3, Task4;
 
 //MS5611 Vars
-double ref_pres, altitude_r, filteredval;
+double ref_pres, altitude_r, filteredval, base_height, true_height;
 
 // MAC Address
 uint8_t broadcastAddress[] = { 0xC4, 0xDE, 0xE2, 0x13, 0xC7, 0x78 };
@@ -39,7 +42,9 @@ typedef struct struct_message {
 	int i;
 	int l;
 	int m;
-  double n;
+  float n;
+  float o;
+  float q;
 } struct_message;
 esp_now_peer_info_t peerInfo;
 struct_message myData;
@@ -67,7 +72,7 @@ typedef struct PID_Val
 }PID_Val;
 PID_Val Pid_1[4] =
 {
-  {80,20,1},
+  {6,0.5,1},
   {3.2,0.35,1.4}, //Kd = 10(tested). Increase Kp increase react speed of motor. (7-8 degrees) 3.2,0.35,1.45
   {3.7,0.085,1.4}, // 3.7, 0.085, 1.4
   {3,0.03,0},

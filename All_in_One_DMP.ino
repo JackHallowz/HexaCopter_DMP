@@ -14,6 +14,7 @@
 #include <ESP32_Servo.h>
 #include "MPU6050_6Axis_MotionApps20.h"
 #include "Definitions.h"
+#include <SimpleKalmanFilter.h>
 #define INTERRUPT_PIN 2  // use pin 2 on Arduino Uno & most boards
 #define LED_PIN 13
 //Declare intances 
@@ -32,7 +33,7 @@ int16_t mx, my, mz;
 float heading, declinationAngle, headingdeg;
 
 //Declare Kalman 
-
+SimpleKalmanFilter pressureKalmanFilter(1, 1, 0.01);
 
 //Declare PID Lib
 
@@ -108,19 +109,24 @@ void setup() {
   // MS5611.setOversampling(OSR_STANDARD);
   // delay(1000);
   //devStatus = accelgyro.dmpInitialize();
-  analogSetWidth(10);
-  analogSetAttenuation(ADC_0db);
+  analogSetWidth(10); 
+  analogReadResolution(10);
+  // analogSetAttenuation(ADC_0db);
 
   //Setpoint
   setpoint_2 = 0;
   setpoint_3 = 0;
   setpoint_4 = 0;
   // Get Setpoint height
-  MS5611.read();
-  ref_pres = MS5611.getPressure();
-  altitude_r = MS5611.getAltitude(ref_pres,1013.25);
+  for(byte n =0; n<5;n++ )
+  {
+    MS5611.read();
+    ref_pres = MS5611.getPressure();
+    base_height += MS5611.getAltitude(ref_pres,1013.25);
+  }
+  base_height /= 5;
   // filteredval = f.filterIn(altitude_r);
-  setpoint_1 = (int)altitude_r+1.5;
+  setpoint_1 = 0;
   delay(1000);
   //PID setup
   pid_Thrust.SetMode(AUTOMATIC);
@@ -199,6 +205,7 @@ void setup() {
  vTaskSuspend(Task4);
  Serial.println("Task BLDC Calibration is created and suspended");
  delay(500);
+
 }
 
 void Task1core(void * parameter)
@@ -219,14 +226,16 @@ void Task2core (void * parameter)
         myData.b = ypr[1]* 180/M_PI;
         myData.c = ypr[2]* 180/M_PI;
         myData.d = ypr[0]* 180/M_PI;
-        myData.e = filteredval;
+        myData.e = true_height;
         myData.f = motor_1;
         myData.g = motor_2;
         myData.h = motor_3;
         myData.i = motor_4;
         myData.l = motor_5;
         myData.m = motor_6;
-        myData.n = out_Roll;
+        myData.n = A3ADC;
+        myData.o = cell_2;
+        myData.q = cell_3;
         esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));   
         vTaskDelay(1/ portTICK_PERIOD_MS);
     }
@@ -236,20 +245,13 @@ void TaskCore1Pid (void* parameter)
 {
   for(;;)
   {
-    // mag.getHeading(&mx, &my, &mz);
-    // heading = atan2(my , mx );
-    // declinationAngle = (0 - (46.0 / 60.0)) / (180 / M_PI);
-    // heading += declinationAngle;
-    // if (heading < 0) heading += 2 * PI;
-    // if (heading > 2 * PI) heading -= 2 * PI;
-    // headingdeg = heading * 180/M_PI;
     
     if(abs(ypr[1]* 180/M_PI) >=30 | abs(ypr[2]* 180/M_PI) >=30)
     {
       Limit = false;
       allstop();
     }
-    
+    battery_com();
     vTaskDelay(1/ portTICK_PERIOD_MS);
   }
 
@@ -343,6 +345,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len)
     break;
     case 'S':
     feedback(code);
+    Alert(Data);
     break;
     case 'T':
     throttle = deli_package.A.substring(1,strlength-1).toDouble();
@@ -350,7 +353,6 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len)
     Alert(Data);
     break;        
     default:
-    Serial.println("Wrong Code");
     Alert("Wrong Code");
     break;
 
@@ -536,30 +538,29 @@ void allstop()
 
 void sensorgather()
 {
+  MS5611.read();
+  ref_pres = MS5611.getPressure();
+  altitude_r = MS5611.getAltitude(ref_pres,1013.25);
+  filteredval = pressureKalmanFilter.updateEstimate(altitude_r);
+  true_height = filteredval - base_height;
   if (!dmpReady) return;
-  // MS5611.read();
-  // ref_pres = MS5611.getPressure();
-  // altitude_r = MS5611.getAltitude(ref_pres,1013.25);
-  // filteredval = f.filterIn(altitude_r);
-
   if (accelgyro.dmpGetCurrentFIFOPacket(fifoBuffer)) 
   { 
     accelgyro.dmpGetQuaternion(&q, fifoBuffer);
     accelgyro.dmpGetGravity(&gravity, &q);
-    accelgyro.dmpGetYawPitchRoll(ypr, &q, &gravity);
-    
+    accelgyro.dmpGetYawPitchRoll(ypr, &q, &gravity);   
   }
 }
 void pid_bldc()
 {
   if(Limit==true)
   {
-    // input_1 = (int)filteredval;
+    input_1 = true_height;
     input_2 = ypr[1]* 180/M_PI; //this is 100% correct
     input_3 = ypr[2]* 180/M_PI;
     input_4 =  ypr[0]* 180/M_PI;
 ;
-    // pid_Thrust.Compute();
+    pid_Thrust.Compute();
     pid_Roll.Compute();
     pid_Pitch.Compute();
     pid_Yaw.Compute();
@@ -571,15 +572,15 @@ void pid_bldc()
     motor_6 = throttle + out_Thrust + out_Roll /*======*/  - out_Yaw; //rear right (CW)
     motor_1 = throttle + out_Thrust + out_Roll + out_Pitch + out_Yaw; //front right (CCW)
 
-    if(A1Raw<1240 && A1Raw>800 )
-    {
-      motor_1 += motor_1 * ((1240 - A3Raw)/(float)3500);
-      motor_2 += motor_2 * ((1240 - A3Raw)/(float)3500);
-      motor_3 += motor_3 * ((1240 - A3Raw)/(float)3500);
-      motor_4 += motor_4 * ((1240 - A3Raw)/(float)3500);
-      motor_5 += motor_5 * ((1240 - A3Raw)/(float)3500);
-      motor_6 += motor_6 * ((1240 - A3Raw)/(float)3500);
-    }
+    // if(A3ADC<1290 && A3ADC>800 )
+    // {
+    //   motor_1 += motor_1 * ((1290 - A3ADC)/(float)3500);
+    //   motor_2 += motor_2 * ((1290 - A3ADC)/(float)3500);
+    //   motor_3 += motor_3 * ((1290 - A3ADC)/(float)3500);
+    //   motor_4 += motor_4 * ((1290 - A3ADC)/(float)3500);
+    //   motor_5 += motor_5 * ((1290 - A3ADC)/(float)3500);
+    //   motor_6 += motor_6 * ((1290 - A3ADC)/(float)3500);
+    // }
 
     servo1.writeMicroseconds(motor_1 = motor_1 > TOP_SPEED ? TOP_SPEED : motor_1);
     servo2.writeMicroseconds(motor_2 = motor_2 > TOP_SPEED ? TOP_SPEED : motor_2);
@@ -602,27 +603,27 @@ void battery_com()
   A3Raw = A3Raw/5;
   A2Raw = A2Raw/5;
   A1Raw = A1Raw/5;
+  A3ADC = A3Raw;
   cell_1 = A3Raw * 3.29/1023;
   cell_2 = A2Raw * 3.29/1023;
   cell_3 = A1Raw * 3.29/1023;
-  
 
 }
 void dmp_config()
 {
-    Serial.println(F("\nSend any character to begin DMP programming and demo: "));
+    Serial.println(F("\nBegin DMP: "));
     delay(2000);
     // load and configure the DMP
     Serial.println(F("Initializing DMP..."));
     devStatus = accelgyro.dmpInitialize();
 
     // supply your own gyro offsets here, scaled for min sensitivity
-    accelgyro.setXAccelOffset(-3270);
-    accelgyro.setYAccelOffset(2095);
-    accelgyro.setZAccelOffset(3485);
-    accelgyro.setXGyroOffset(21);
-    accelgyro.setYGyroOffset(164);
-    accelgyro.setZGyroOffset(30); // 1688 factory default for my test chip
+    accelgyro.setXAccelOffset(-3360);
+    accelgyro.setYAccelOffset(2071);
+    accelgyro.setZAccelOffset(3470);
+    accelgyro.setXGyroOffset(25);
+    accelgyro.setYGyroOffset(165);
+    accelgyro.setZGyroOffset(38); // 1688 factory default for my test chip
 
     // make sure it worked (returns 0 if so)
     if (devStatus == 0) {
