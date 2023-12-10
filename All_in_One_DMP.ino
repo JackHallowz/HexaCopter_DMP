@@ -15,18 +15,12 @@
 #include "MPU6050_6Axis_MotionApps20.h"
 #include "Definitions.h"
 #include <SimpleKalmanFilter.h>
-#define INTERRUPT_PIN 2  // use pin 2 on Arduino Uno & most boards
+#define INTERRUPT_PIN 2  
 #define LED_PIN 13
 //Declare intances 
 MPU6050 accelgyro;
 HMC5883L mag(0x1E);
 MS5611 MS5611(0x77);
-
-//Declare for comple filter
-const float cutoff_freq = 10.0;
-const float sample_time = 0.005;
-IIR::ORDER  order  = IIR::ORDER::OD2;
-Filter f(cutoff_freq, sample_time, order);
 
 // Heading variables
 int16_t mx, my, mz;
@@ -37,13 +31,15 @@ SimpleKalmanFilter pressureKalmanFilter(1, 1, 0.01);
 
 //Declare PID Lib
 
-double input_1,out_Thrust,input_2,out_Roll,input_3,out_Pitch,input_4,out_Yaw;
-double setpoint_1,setpoint_2,setpoint_3,setpoint_4;
+double input_1,out_Thrust,input_2,out_Roll,input_3,out_Pitch,input_4,out_Yaw, input_5, out_Xd, input_6, out_Yd;
+double setpoint_1,setpoint_2,setpoint_3,setpoint_4,setpoint_5,setpoint_6;
 PID pid_Thrust(&input_1, &out_Thrust, &setpoint_1, Pid_1[0].Kp, Pid_1[0].Ki, Pid_1[0].Kd, DIRECT);
 PID pid_Roll(&input_2, &out_Roll, &setpoint_2, Pid_1[1].Kp, Pid_1[1].Ki, Pid_1[1].Kd, DIRECT);
 PID pid_Pitch(&input_3, &out_Pitch, &setpoint_3, Pid_1[2].Kp, Pid_1[2].Ki, Pid_1[2].Kd, DIRECT);
 PID pid_Yaw(&input_4, &out_Yaw, &setpoint_4, Pid_1[3].Kp, Pid_1[3].Ki, Pid_1[3].Kd, DIRECT);
-
+PID pid_X(&input_5, &out_Xd, &setpoint_5, Pid_1[4].Kp, Pid_1[4].Ki, Pid_1[4].Kd, DIRECT);
+PID pid_Y(&input_6, &out_Yd, &setpoint_6, Pid_1[5].Kp, Pid_1[5].Ki, Pid_1[5].Kd, DIRECT);
+double pid_error_gain_altitude;
 //Declare motor vars
 double motor_1,motor_2,motor_3,motor_4,motor_5,motor_6;
 
@@ -214,6 +210,7 @@ void Task1core(void * parameter)
   { 
     sensorgather();
     pid_bldc();
+    
     vTaskDelay(1/ portTICK_PERIOD_MS);
   }
 }
@@ -222,7 +219,6 @@ void Task2core (void * parameter)
 {
     for(;;)
     {
-        
         myData.b = ypr[1]* 180/M_PI;
         myData.c = ypr[2]* 180/M_PI;
         myData.d = ypr[0]* 180/M_PI;
@@ -233,9 +229,9 @@ void Task2core (void * parameter)
         myData.i = motor_4;
         myData.l = motor_5;
         myData.m = motor_6;
-        myData.n = A3ADC;
-        myData.o = cell_2;
-        myData.q = cell_3;
+        myData.n = cell_1;
+        myData.o = Px;
+        myData.q = Py;
         esp_now_send(broadcastAddress, (uint8_t *) &myData, sizeof(myData));   
         vTaskDelay(1/ portTICK_PERIOD_MS);
     }
@@ -245,7 +241,6 @@ void TaskCore1Pid (void* parameter)
 {
   for(;;)
   {
-    
     if(abs(ypr[1]* 180/M_PI) >=30 | abs(ypr[2]* 180/M_PI) >=30)
     {
       Limit = false;
@@ -283,82 +278,105 @@ void TaskCore1BLDC (void* parameter)
 
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) 
 {
-  memcpy(&deli_package, incomingData, sizeof(deli_package));
-  Serial.print(deli_package.A);
-  strlength = deli_package.A.length();
-  Data = deli_package.A;
-  char res = deli_package.A.charAt(strlength-strlength);
-  char code = deli_package.A.charAt(1);
-  char code_2 = deli_package.A.charAt(2);
-  Serial.println(code);
-  switch (res)
+  char macstr[18];
+  snprintf(macstr, sizeof(macstr), "%02x:%02x:%02x:%02x:%02x:%02x",mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  String address = macstr;
+  if(address == "c4:de:e2:13:c7:78")
   {
-    case 'A':
-    Limit = false;
-    allstop();
-    vTaskSuspend(Task3);
-    //Serial.print((int)eTaskGetState(Task3));
-    Alert("PID-OFF");
-    break;
-    case 'B':
-    Limit = true;
-    vTaskResume(Task3);
-    //Serial.print((String)eTaskGetState(Task3));
-    Alert("PID-ON");
-    break;
-    case 'C':
-    Serial.println("Resume all Tasks"); 
-    vTaskResume(Task1);
-    vTaskResume(Task2);
-    Alert("SENSORS-ENABLED");
-    break;
-    case 'D':
-    Serial.println("Entering Calibration mode:");
-    vTaskResume(Task4);
-    break;
-    case 'E':
-    Limit = false;
-    Serial.println("Pause all");
-    allstop();
-    vTaskSuspend(Task1);
-    vTaskSuspend(Task2);
-    vTaskSuspend(Task4);
-    break;
-    case 'F':
-    dex = deli_package.A.indexOf("F");
-    height = deli_package.A.substring(1,strlength-1);
-    Serial.println(height);
-    setpoint_1 = height.toDouble();
-    Alert(Data);
-    break;
-    case 'P':
-    changevalPD(code, res);
-    Alert(Data);
-    break;
-    case 'K':
-    changevalPD(code, res);
-    Alert(Data);
-    break;
-    case 'I':
-    changevalPD(code, res);
-    Alert(Data);
-    break;
-    case 'S':
-    feedback(code);
-    Alert(Data);
-    break;
-    case 'T':
-    throttle = deli_package.A.substring(1,strlength-1).toDouble();
-    Serial.println(throttle);
-    Alert(Data);
-    break;        
-    default:
-    Alert("Wrong Code");
-    break;
-
+    memcpy(&deli_package, incomingData, sizeof(deli_package));
+    Serial.print(deli_package.A);
+    strlength = deli_package.A.length();
+    Data = deli_package.A;
+    char res = deli_package.A.charAt(strlength-strlength);
+    char code = deli_package.A.charAt(1);
+    char code_2 = deli_package.A.charAt(2);
+    Serial.println(code);
+    switch (res)
+    {
+      case 'A':
+      Limit = false;
+      allstop();
+      vTaskSuspend(Task3);
+      //Serial.print((int)eTaskGetState(Task3));
+      Alert("PID-OFF");
+      break;
+      case 'B':
+      Limit = true;
+      vTaskResume(Task3);
+      //Serial.print((String)eTaskGetState(Task3));
+      Alert("PID-ON");
+      break;
+      case 'C':
+      Serial.println("Resume all Tasks"); 
+      vTaskResume(Task1);
+      vTaskResume(Task2);
+      Alert("SENSORS-ENABLED");
+      break;
+      case 'D':
+      Alert("Calibration");
+      vTaskResume(Task4);
+      break;
+      case 'E':
+      Limit = false;
+      allstop();
+      vTaskSuspend(Task1);
+      vTaskSuspend(Task2);
+      vTaskSuspend(Task4);
+      break;
+      case 'F':
+      dex = deli_package.A.indexOf("F");
+      height = deli_package.A.substring(1,strlength-1);
+      setpoint_1 = height.toDouble();
+      Alert(Data);
+      break;
+      case 'P':
+      changevalPD(code, res);
+      Alert(Data);
+      break;
+      case 'K':
+      changevalPD(code, res);
+      Alert(Data);
+      break;
+      case 'I':
+      changevalPD(code, res);
+      Alert(Data);
+      break;
+      case 'S':
+      feedback(code);
+      Alert(Data);
+      break;
+      case 'T':
+      {
+      throttle = deli_package.A.substring(1,strlength-1).toDouble();
+      double* Out = Defuzzy();
+      pid_Roll.SetTunings(Out[0],Out[1],Out[2]);
+      free(Out);
+      Serial.println(pid_Roll.GetKp());
+      Alert(Data);
+      }
+      break;        
+      default:
+      break;
+    }
   }
+  else
+  {
+    memcpy(&Distance, incomingData, sizeof(Distance));
+  }
+  
+ 
 }
 
+double positionY_3D()
+{
+  Py = (pow(Distance.d1,2)+pow(O1O2,2)-pow(Distance.d2,2))/(2*O1O2);
+  return Py;
+}
+double positionX_3D()
+{
+  Px =  (pow(Distance.d2,2)+pow(O2O3,2)-pow(Distance.d3,2))/(2*O2O3);
+  return Px;
+}
 void Alert(String mess)
 {
   
@@ -372,12 +390,6 @@ void feedback(char code)
     TOP_SPEED = deli_package.A.substring(2,strlength).toInt();
     deli_package.A.toCharArray(Command,strlength);
     break;
-    case 'I':
-    {
-      IDLE_SPEED =  deli_package.A.substring(2,strlength).toInt();
-      deli_package.A.toCharArray(Command,strlength);
-      break;
-    }
     case 'E':
     {
       char check = deli_package.A.charAt(2);
@@ -507,8 +519,6 @@ void test()
 {
     for (int i = MIN_PULSE_LENGTH; i <= 1100; i += 5) {
         Serial.print("Pulse length = ");
-        Serial.println(i);
-        
         servo1.writeMicroseconds(i);
         servo2.writeMicroseconds(i);
         servo3.writeMicroseconds(i);
@@ -550,7 +560,10 @@ void sensorgather()
     accelgyro.dmpGetGravity(&gravity, &q);
     accelgyro.dmpGetYawPitchRoll(ypr, &q, &gravity);   
   }
+  positionY_3D();
+  positionX_3D();
 }
+
 void pid_bldc()
 {
   if(Limit==true)
@@ -559,11 +572,15 @@ void pid_bldc()
     input_2 = ypr[1]* 180/M_PI; //this is 100% correct
     input_3 = ypr[2]* 180/M_PI;
     input_4 =  ypr[0]* 180/M_PI;
-;
     pid_Thrust.Compute();
     pid_Roll.Compute();
     pid_Pitch.Compute();
     pid_Yaw.Compute();
+    pid_altitude_Kp_gain(setpoint_1-true_height);
+    // pid_X.Compute();
+    // pid_Y.Compute();
+    // setpoint_3 = out_Xd;
+    // setpoint_2 = out_Yd;
 
     motor_2 = throttle + out_Thrust - out_Roll + out_Pitch - out_Yaw; //front left (CW)
     motor_3 = throttle + out_Thrust - out_Roll /*========*/+ out_Yaw; //rear left (CCW)
@@ -571,16 +588,6 @@ void pid_bldc()
     motor_5 = throttle + out_Thrust + out_Roll - out_Pitch + out_Yaw; // back right (CCW)
     motor_6 = throttle + out_Thrust + out_Roll /*======*/  - out_Yaw; //rear right (CW)
     motor_1 = throttle + out_Thrust + out_Roll + out_Pitch + out_Yaw; //front right (CCW)
-
-    // if(A3ADC<1290 && A3ADC>800 )
-    // {
-    //   motor_1 += motor_1 * ((1290 - A3ADC)/(float)3500);
-    //   motor_2 += motor_2 * ((1290 - A3ADC)/(float)3500);
-    //   motor_3 += motor_3 * ((1290 - A3ADC)/(float)3500);
-    //   motor_4 += motor_4 * ((1290 - A3ADC)/(float)3500);
-    //   motor_5 += motor_5 * ((1290 - A3ADC)/(float)3500);
-    //   motor_6 += motor_6 * ((1290 - A3ADC)/(float)3500);
-    // }
 
     servo1.writeMicroseconds(motor_1 = motor_1 > TOP_SPEED ? TOP_SPEED : motor_1);
     servo2.writeMicroseconds(motor_2 = motor_2 > TOP_SPEED ? TOP_SPEED : motor_2);
@@ -592,8 +599,7 @@ void pid_bldc()
 }
 void battery_com()
 {
-  
-  for (byte n =0; n<5;n++)
+  for (byte n =0; n<5;n++) 
   {
     A3Raw += analogRead(adc3);
     A2Raw += analogRead(adc2);
@@ -607,7 +613,14 @@ void battery_com()
   cell_1 = A3Raw * 3.29/1023;
   cell_2 = A2Raw * 3.29/1023;
   cell_3 = A1Raw * 3.29/1023;
-
+}
+double* Defuzzy()
+{
+  for(int i=0;i<nMember;i++)
+  {
+    nuy[i]=Nuy[i].Priority();
+  }
+  return suge.defuzzication(nuy, K_Out, 8, 3);
 }
 void dmp_config()
 {
@@ -660,6 +673,16 @@ void dmp_config()
 
     // configure LED for output
     pinMode(LED_PIN, OUTPUT);
+}
+void pid_altitude_Kp_gain(double error)
+{
+  if(error > 4 || error <-4)
+  {
+    pid_error_gain_altitude = (abs(error)-4)/8.0;
+    if(pid_error_gain_altitude >3 ) pid_error_gain_altitude=3;
+    pid_Thrust.SetTunings(Pid_1[0].Kp+pid_error_gain_altitude,Pid_1[0].Ki,Pid_1[0].Kd);
+  }
+ 
 }
 void loop() 
 {

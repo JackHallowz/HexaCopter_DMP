@@ -1,3 +1,4 @@
+#include "FuzzySimple.h"
 double Timer; //1000 is enough
 int TOP_SPEED = 1500;
 int IDLE_SPEED = 950;
@@ -15,10 +16,10 @@ double gyroX, gyroY, gyroZ;
 int16_t tempRaw;
 int16_t ax, ay, az;
 int16_t gx, gy, gz;
-double gyroXangle, gyroYangle; // Angle calculate using the gyro only
-double compAngleX, compAngleY; // Calculated angle using a complementary filter
-double kalAngleX, kalAngleY; // Calculated angle using a Kalman filter
 
+// X and Y Position
+double Position_X;
+double Position_Y;
 
 //Task Handle
 TaskHandle_t Task1, Task2, Task3, Task4;
@@ -58,6 +59,19 @@ typedef struct delivery
 } delivery;
 delivery deli_package;
 
+typedef struct Position
+{
+	double X;
+  double Y;
+} Position;
+Position Position_UWB;
+typedef struct Dis
+{
+	double d1;
+  double d2;
+  double d3;
+} Dis;
+Dis Distance;
 //Other Variables
 String Data, height, rev_Pid;
 int strlength, dex;
@@ -70,12 +84,15 @@ typedef struct PID_Val
   double Ki;
   double Kd;
 }PID_Val;
-PID_Val Pid_1[4] =
+
+PID_Val Pid_1[6] =
 {
-  {6,0.5,1},
-  {3.2,0.35,1.4}, //Kd = 10(tested). Increase Kp increase react speed of motor. (7-8 degrees) 3.2,0.35,1.45
+  {6,0.01,1.5},
+  {3.7,0.35,1.4}, //Kd = 10(tested). Increase Kp increase react speed of motor. (7-8 degrees) 3.2,0.35,1.45 , 1400:Kp-4.5,
   {3.7,0.085,1.4}, // 3.7, 0.085, 1.4
   {3,0.03,0},
+  {0,0,0},
+  {0,0,0}
 };
 bool blinkState = false;
 
@@ -99,7 +116,45 @@ double ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gr
 // packet structure for InvenSense teapot demo
 uint8_t teapotPacket[14] = { '$', 0x02, 0,0, 0,0, 0,0, 0,0, 0x00, 0x00, '\r', '\n' };
 
+//Fuzzy 
+const int nMember = 5;
+typedef struct DatA
+{
+  double left;
+  double right;
+  double top;
+}DatA;
+double nuy[nMember]={};
+double K_Out[3][nMember]=
+{
+  {3.4, 3.25, 3.4, 3.1, 4.5},
+  {0.35, 0.30, 0.35, 0.35, 0.45},
+  {1.4, 1.2, 1.4, 1.45, 1.95},
+};
+double* K_K = NULL;
 
+char buffer[70];
+DatA Data_in[nMember]=
+{
+  {1200,1250},
+  {1200,1300,1250},
+  {1250,1350,1300},
+  {1300,1400,1350},
+  {1350,1400},
+};
 
+SimpleFuzzy Nuy[nMember]={
+  {1,&throttle,Data_in[0].left,Data_in[0].right},
+  {3,&throttle,Data_in[1].left, Data_in[1].right, Data_in[1].top},
+  {3,&throttle,Data_in[2].left, Data_in[2].right, Data_in[2].top},
+  {3,&throttle,Data_in[3].left, Data_in[3].right, Data_in[3].top},
+  {2,&throttle,Data_in[4].left, Data_in[4].right},
+};
 
+sugeno suge(3,3);
+
+//UWB
+double O1O2 = 1.2;
+double O2O3 = 2.7;
+double Oh,Px,Py;
 
