@@ -113,6 +113,7 @@ void sugeno::initiate(int Input)
 	// 	double outMember[sth];
 	// }Data_int;
 }
+
 double* sugeno::defuzzication(double a[], double b[][LENGTH], int Length, int Out_length)
 {
   double numo = 0;
@@ -125,7 +126,7 @@ double* sugeno::defuzzication(double a[], double b[][LENGTH], int Length, int Ou
       numo += a[j]*b[i][j];
       deno += a[j];
     }
-    sth[i] = (numo/deno);
+    sth[i] = (numo/deno);//output Kp Ki Kd
     numo = 0;
     deno = 0;
   }

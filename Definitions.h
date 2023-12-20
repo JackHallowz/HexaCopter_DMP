@@ -25,27 +25,29 @@ double Position_Y;
 TaskHandle_t Task1, Task2, Task3, Task4;
 
 //MS5611 Vars
-double ref_pres, altitude_r, filteredval, base_height, true_height;
-
+double ref_pres, altitude_r, filteredval, base_height,true_height;
 // MAC Address
-uint8_t broadcastAddress[] = { 0xC4, 0xDE, 0xE2, 0x13, 0xC7, 0x78 };
-
+// uint8_t broadcastAddress[] = { 0xC4, 0xDE, 0xE2, 0x13, 0xC7, 0x78 };
+//Second one
+//FC:B4:67:4F:40:80
+uint8_t broadcastAddress[] = { 0xFC, 0xB4, 0x67, 0x4F, 0x40, 0x80 };
+//B0:B2:1C:A8:77:B0
+// uint8_t broadcastAddress[] = { 0xB0, 0xB2, 0x1C, 0xA8, 0x77, 0xB0 };
+// uint8_t broadcastAddress[] = { 0xB0, 0xA7, 0x32, 0x2D, 0x88, 0x18 };
 //Structure for data transfer
 typedef struct struct_message {
 	char a[32];
 	float b;
 	float c;
 	float d;
-	double e;
-	int f;
-	int g;
-	int h;
-	int i;
-	int l;
-	int m;
+  float e;
   float n;
   float o;
   float q;
+  float r;
+  float t;
+  float s;
+  float i;
 } struct_message;
 esp_now_peer_info_t peerInfo;
 struct_message myData;
@@ -87,12 +89,12 @@ typedef struct PID_Val
 
 PID_Val Pid_1[6] =
 {
-  {6,0.01,1.5},
-  {3.7,0.35,1.4}, //Kd = 10(tested). Increase Kp increase react speed of motor. (7-8 degrees) 3.2,0.35,1.45 , 1400:Kp-4.5,
-  {3.7,0.085,1.4}, // 3.7, 0.085, 1.4
-  {3,0.03,0},
-  {0,0,0},
-  {0,0,0}
+  {3,0.001,1.5},
+  {3.2,0.35,1.4}, //Kd = 10(tested). Increase Kp increase react speed of motor. (7-8 degrees) 3.2,0.35,1.45 ,  roll // 5;20;1.31
+  {3.7,0.085,1.4}, // 3.7, 0.085, 1.4 //pitch 6,15,1.31
+  {3.5,0.03,0},
+  {4,0,0.5}, //6 0.01 1
+  {4,0,0.5}  //6 0.01 1
 };
 bool blinkState = false;
 
@@ -125,7 +127,7 @@ typedef struct DatA
   double top;
 }DatA;
 double nuy[nMember]={};
-double K_Out[3][nMember]=
+double Roll_Out[3][nMember]=
 {
   {3.4, 3.25, 3.4, 3.1, 4.5},
   {0.35, 0.30, 0.35, 0.35, 0.45},
@@ -154,7 +156,16 @@ SimpleFuzzy Nuy[nMember]={
 sugeno suge(3,3);
 
 //UWB
-double O1O2 = 1.2;
-double O2O3 = 2.7;
-double Oh,Px,Py;
-
+double O1O2 = 5;
+double O2O3 = 3.87;
+double Oh,Px,Py,Px_error, Py_error;
+double ramp;
+double OO_1;
+double OA = 5;
+int firstmeasure;
+double D1_addon, D2_addon, D3_addon =0;
+// Take off down
+bool takeoff = false;
+bool takedown = false;
+bool holdpos = false;
+double takeoff_set;
